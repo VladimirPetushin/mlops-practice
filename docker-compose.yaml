@@ -45,11 +45,7 @@ services:
 
   airflow-init:
     <<: *airflow-common
-    entrypoint: /bin/bash
-    command:
-      - -c
-      - |
-        airflow db migrate
+    command: ["airflow", "db", "migrate"]
     restart: "no"
 
   api-server:

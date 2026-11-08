@@ -6,6 +6,7 @@ import re
 import tempfile
 from datetime import date
 from pathlib import Path
+import logging
 
 import numpy as np
 
@@ -53,7 +54,26 @@ def business_date(explicit, interval_start):
 
 
 def validate_rows(rows, day):
-    raise NotImplementedError("Задание 2: validate_rows")
+    if len(rows) == 0:
+        raise ValueError('rows is empty')
+    set_ids = set()
+    for row in rows:
+        if not isinstance(row['customer_id'], str) or not row['customer_id']:
+            raise ValueError("Invalid customer id")
+        if row['customer_id'] in set_ids:
+            raise ValueError("Duplicate customer_id")
+        if row['business_date'] != day:
+            raise ValueError("business_date != day")
+        if type(row['age']) not in (int, float) or not(row['age'] >= 18 and row['age'] <= 100):
+            raise ValueError("Feature is out of range or not int or float")
+        elif type(row['tenure_months']) not in (int, float) or not(row['tenure_months'] >= 0 and row['tenure_months'] <= 240):
+            raise ValueError("Feature is out of range or not int or float")
+        elif type(row['monthly_spend']) not in (int, float) or not(row['monthly_spend'] >= 0 and row['monthly_spend'] <= 10000):
+            raise ValueError("Feature is out of range or not int or float")
+        elif type(row['support_tickets_30d']) not in (int, float) or not(row['support_tickets_30d'] >= 0 and row['support_tickets_30d'] <= 100):
+            raise ValueError("Feature is out of range or not int or float")
+        set_ids.add(row['customer_id'])
+    return rows
 
 
 def validate_model(model):
@@ -79,12 +99,64 @@ def predict(rows, model):
 
 
 def infer_batches(rows, model, batch_size):
-    raise NotImplementedError("Задание 3: infer_batches")
-
+    results = []
+    if not(type(batch_size) is int):
+        raise ValueError('batch_size not int')
+    if not(1 <= batch_size <= 1000):
+        raise ValueError('batch_size is out of range')
+    for i, batch in enumerate(range(0, len(rows), batch_size), start=1):
+        logging.info("Batch %d: %d rows", i, len(rows[batch:batch + batch_size]))
+        results.extend(predict(rows[batch:batch + batch_size], model))
+    return results
 
 def validate_predictions(predictions, expected_ids):
-    raise NotImplementedError("Задание 4: validate_predictions")
+    if len(predictions) != len(expected_ids):
+        raise ValueError('len(predictions) != len(expected_ids)')
+    seen_ids = set()
+    for i, j in zip(predictions, expected_ids):
+        if type(i['score']) not in (int, float) or not(0 <= i['score'] <= 1):
+            raise ValueError('score is not int or float or out of range')
+        if type(i['label']) is not int or i['label'] not in (0, 1):
+            raise ValueError('label is not int or not in (0, 1)')
+        if not(i['label'] == int(i['score'] >= 0.5)):
+            raise ValueError('label does not match score')
+        customer_id = i["customer_id"]
+        if customer_id in seen_ids:
+            raise ValueError("Duplicate customer_id")
+        seen_ids.add(i['customer_id'])
+    if seen_ids != set(expected_ids):
+        raise ValueError('pred_ids do  not match expected_ids')
 
 
 def replace_day(conn, day, model_version, predictions):
-    raise NotImplementedError("Задание 5: replace_day")
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (day + ":" + model_version,),
+            )
+            if not predictions:
+                raise ValueError("Empty predictions")
+            cur.execute(
+                """
+                DELETE FROM predictions
+                WHERE business_date = %s AND model_version = %s
+                """,
+                (day, model_version)
+            )
+            for prediction in predictions:
+                cur.execute(
+                    """
+                    INSERT INTO predictions
+                        (business_date, model_version, customer_id, score, label)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        day,
+                        model_version,
+                        prediction["customer_id"],
+                        prediction["score"],
+                        prediction["label"],
+                    ),
+                )
+    
